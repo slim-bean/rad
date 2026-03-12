@@ -9,6 +9,7 @@
 #include "display.h"
 #include "geiger.h"
 #include "click.h"
+#include "battery.h"
 
 static const char *TAG = "geiger";
 
@@ -40,6 +41,8 @@ static const char *TAG = "geiger";
 #define NOISE_X     200
 #define NOISE_Y     108
 
+#define BATT_X      240
+#define BATT_Y      210
 
 /* ------------------------------------------------------------------ */
 /*  Screen state — only redraw values that changed                     */
@@ -49,6 +52,7 @@ static uint16_t prev_dose  = 0xFFFF;
 static uint16_t prev_mrem  = 0xFFFF;
 static uint32_t prev_total = 0xFFFFFFFF;
 static bool     prev_noise = false;
+static uint16_t prev_batt  = 0xFFFF;
 
 
 static void draw_static_labels(void)
@@ -60,7 +64,7 @@ static void draw_static_labels(void)
     display_draw_string(DOSE_X, DOSE_Y, "uSv/h", COL_GREY, COL_BLACK, 2);
     display_draw_string(MREM_X, MREM_Y, "mrem/h", COL_GREY, COL_BLACK, 2);
 
-    display_fill_rect(BAR_X - 1, BAR_Y - 1, BAR_W + 2, BAR_H + 2, COL_DGREY);
+    display_fill_rect(BAR_X - 2, BAR_Y - 2, BAR_W + 4, BAR_H + 4, COL_GREY);
     display_fill_rect(BAR_X, BAR_Y, BAR_W, BAR_H, COL_BLACK);
 
     display_draw_string(INFO_X, INFO_Y, "N:", COL_GREY, COL_BLACK, 2);
@@ -156,6 +160,23 @@ static void draw_noise(bool noisy)
 }
 
 
+static void draw_battery(uint16_t mv)
+{
+    uint16_t rounded = (mv / 10) * 10;
+    if (rounded == prev_batt) return;
+    prev_batt = rounded;
+
+    uint16_t color = COL_GREEN;
+    if (mv < 3500) color = COL_YELLOW;
+    if (mv < 3300) color = COL_RED;
+
+    char buf[8];
+    snprintf(buf, sizeof(buf), "%u.%02uV", mv / 1000, (mv % 1000) / 10);
+
+    display_draw_string(BATT_X, BATT_Y, buf, color, COL_BLACK, 2);
+}
+
+
 void app_main(void)
 {
     ESP_LOGI(TAG, "Geiger counter starting");
@@ -163,6 +184,7 @@ void app_main(void)
     display_init();
     click_init();
     geiger_init();
+    battery_init();
 
     draw_static_labels();
 
@@ -191,7 +213,10 @@ void app_main(void)
         draw_total(total);
         draw_noise(noisy);
 
-        if (++loop_count % 50 == 0)   /* ~5 s at 100 ms tick */
+        if (++loop_count % 20 == 0)   /* ~2 s */
+            draw_battery(battery_read_mv());
+
+        if (loop_count % 50 == 0)     /* ~5 s */
             ESP_LOGI(TAG, "cpm=%u total=%lu noise=%d ns_pin=%d",
                      cpm, (unsigned long)total, noisy,
                      gpio_get_level(PIN_GEIGER_NS));
