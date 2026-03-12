@@ -17,12 +17,12 @@
 
 #define TFT_WIDTH       320
 #define TFT_HEIGHT      240
-#define TFT_SPI_HOST    SPI2_HOST
+#define TFT_SPI_HOST    SPI3_HOST
 #define TFT_SPI_FREQ_HZ (40 * 1000 * 1000)
 
 /* ---- Pocket Geiger Type 5 ---- */
 #define PIN_GEIGER_SIG  4           /* D12 — radiation pulse (active LOW) */
-#define PIN_GEIGER_NS   13          /* D7  — noise indicator (active LOW) */
+#define PIN_GEIGER_NS   13          /* D7  — noise indicator (active HIGH) */
 
 /* ---- Piezo buzzer (Adafruit #1739) ---- */
 #define PIN_PIEZO       15          /* A4  — LEDC PWM output */

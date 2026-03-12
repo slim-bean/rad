@@ -2,6 +2,7 @@
 #include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "driver/gpio.h"
 #include "esp_log.h"
 #include "rom/ets_sys.h"
 #include "pins.h"
@@ -166,6 +167,9 @@ void app_main(void)
     draw_static_labels();
 
     ESP_LOGI(TAG, "Ready — waiting for radiation events on GPIO %d", PIN_GEIGER_SIG);
+    ESP_LOGI(TAG, "NS pin = GPIO %d, current level = %d", PIN_GEIGER_NS, gpio_get_level(PIN_GEIGER_NS));
+
+    uint32_t loop_count = 0;
 
     while (1) {
         if (geiger_click_pending()) {
@@ -175,16 +179,22 @@ void app_main(void)
             click_stop();
         }
 
-        uint16_t cpm  = geiger_get_cpm();
-        uint16_t dose = geiger_get_dose_x100();
-        bool noisy    = geiger_is_noisy();
+        uint16_t cpm    = geiger_get_cpm();
+        uint16_t dose   = geiger_get_dose_x100();
+        bool     noisy  = geiger_is_noisy();
+        uint32_t total  = geiger_get_total();
 
         draw_cpm(cpm);
         draw_dose(dose);
         draw_mrem(dose);    /* mrem_x1000 == dose_x100 numerically */
         draw_bar(cpm);
-        draw_total(geiger_get_total());
+        draw_total(total);
         draw_noise(noisy);
+
+        if (++loop_count % 50 == 0)   /* ~5 s at 100 ms tick */
+            ESP_LOGI(TAG, "cpm=%u total=%lu noise=%d ns_pin=%d",
+                     cpm, (unsigned long)total, noisy,
+                     gpio_get_level(PIN_GEIGER_NS));
 
         vTaskDelay(pdMS_TO_TICKS(100));
     }

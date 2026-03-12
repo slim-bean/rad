@@ -22,7 +22,7 @@ static esp_timer_handle_t second_timer;
 static void IRAM_ATTR sig_isr(void *arg)
 {
     int ns = gpio_get_level(PIN_GEIGER_NS);
-    if (ns == 1) {
+    if (ns == 0) {
         portENTER_CRITICAL_ISR(&spinlock);
         if (current_bin_count < 255)
             current_bin_count++;
@@ -30,7 +30,7 @@ static void IRAM_ATTR sig_isr(void *arg)
         click_flag = 1;
         portEXIT_CRITICAL_ISR(&spinlock);
     }
-    noise_flag = (ns == 0);
+    noise_flag = (ns != 0);
 }
 
 

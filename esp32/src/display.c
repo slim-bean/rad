@@ -1,11 +1,15 @@
 #include <string.h>
 #include "driver/gpio.h"
 #include "driver/spi_master.h"
+#include "esp_check.h"
 #include "esp_lcd_panel_io.h"
 #include "esp_lcd_panel_ops.h"
 #include "esp_lcd_panel_vendor.h"
+#include "esp_log.h"
 #include "pins.h"
 #include "display.h"
+
+static const char *TAG = "display";
 
 /* ------------------------------------------------------------------ */
 /*  8×8 bitmap font — printable ASCII 0x20–0x7E, MSB = leftmost pixel */
@@ -149,8 +153,9 @@ void display_init(void)
         .pin_bit_mask = (1ULL << PIN_TFT_BL),
         .mode = GPIO_MODE_OUTPUT,
     };
-    gpio_config(&bl_cfg);
-    gpio_set_level(PIN_TFT_BL, 1);
+    ESP_ERROR_CHECK(gpio_config(&bl_cfg));
+    ESP_ERROR_CHECK(gpio_set_level(PIN_TFT_BL, 1));
+    ESP_LOGI(TAG, "Backlight on (GPIO %d)", PIN_TFT_BL);
 
     spi_bus_config_t bus = {
         .sclk_io_num     = PIN_TFT_SCLK,
@@ -160,7 +165,8 @@ void display_init(void)
         .quadhd_io_num   = -1,
         .max_transfer_sz = TFT_WIDTH * 40 * sizeof(uint16_t),
     };
-    spi_bus_initialize(TFT_SPI_HOST, &bus, SPI_DMA_CH_AUTO);
+    ESP_ERROR_CHECK(spi_bus_initialize(TFT_SPI_HOST, &bus, SPI_DMA_CH_AUTO));
+    ESP_LOGI(TAG, "SPI bus initialised (host %d)", TFT_SPI_HOST);
 
     esp_lcd_panel_io_handle_t io;
     esp_lcd_panel_io_spi_config_t io_cfg = {
@@ -172,22 +178,28 @@ void display_init(void)
         .spi_mode          = 0,
         .trans_queue_depth  = 10,
     };
-    esp_lcd_new_panel_io_spi(TFT_SPI_HOST, &io_cfg, &io);
+    ESP_ERROR_CHECK(esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)TFT_SPI_HOST, &io_cfg, &io));
+    ESP_LOGI(TAG, "Panel IO created (DC=%d CS=%d)", PIN_TFT_DC, PIN_TFT_CS);
 
     esp_lcd_panel_dev_config_t panel_cfg = {
         .reset_gpio_num = PIN_TFT_RST,
         .rgb_endian     = LCD_RGB_ENDIAN_BGR,
         .bits_per_pixel = 16,
     };
-    esp_lcd_new_panel_st7789(io, &panel_cfg, &panel);
+    ESP_ERROR_CHECK(esp_lcd_new_panel_st7789(io, &panel_cfg, &panel));
+    ESP_LOGI(TAG, "ST7789 panel created (RST=%d)", PIN_TFT_RST);
 
-    esp_lcd_panel_reset(panel);
-    esp_lcd_panel_init(panel);
-    esp_lcd_panel_invert_color(panel, true);
-    esp_lcd_panel_swap_xy(panel, true);
-    esp_lcd_panel_mirror(panel, false, true);
+    ESP_ERROR_CHECK(esp_lcd_panel_reset(panel));
+    ESP_ERROR_CHECK(esp_lcd_panel_init(panel));
+    ESP_ERROR_CHECK(esp_lcd_panel_invert_color(panel, true));
+    ESP_ERROR_CHECK(esp_lcd_panel_swap_xy(panel, true));
+    ESP_ERROR_CHECK(esp_lcd_panel_mirror(panel, false, true));
+    ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel, true));
+
+    ESP_LOGI(TAG, "Panel configured — display ON");
 
     display_fill_rect(0, 0, TFT_WIDTH, TFT_HEIGHT, COL_BLACK);
+    ESP_LOGI(TAG, "Init complete (%dx%d)", TFT_WIDTH, TFT_HEIGHT);
 }
 
 
