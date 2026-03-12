@@ -14,6 +14,7 @@
 typedef enum {
     DISP_CPM,
     DISP_DOSE,
+    DISP_MREM,
     DISP_COUNT,
     DISP_MODE_COUNT
 } display_mode_t;

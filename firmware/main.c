@@ -24,6 +24,7 @@ static void init_hardware(void);
 static void display_update(void);
 static void display_cpm(void);
 static void display_dose(void);
+static void display_mrem(void);
 static void display_count(void);
 
 
@@ -90,6 +91,9 @@ static void display_update(void)
         break;
     case DISP_DOSE:
         display_dose();
+        break;
+    case DISP_MREM:
+        display_mrem();
         break;
     case DISP_COUNT:
         display_count();
@@ -159,6 +163,35 @@ static void display_dose(void)
     LCD_putc(3, '0' + (fraction % 10));
     LCD_putc(4, 'U');
     LCD_putc(5, 'V');
+    LCD_putc(6, '\0');
+
+    LCD_UpdateRequired(1, 0);
+}
+
+
+/*
+ * Dose rate in mrem/h displayed as X:YYYР.
+ * 1 µSv = 0.1 mrem, so mrem/h × 1000 == µSv/h × 100 (same value).
+ * Format: " X:YYYR"  →  X.YYY mrem/h  (max 9.999)
+ */
+static void display_mrem(void)
+{
+    uint16_t m = geiger_get_dose_x100();
+
+    if (m > 9999)
+        m = 9999;
+
+    uint8_t integer = m / 1000;
+    uint16_t frac   = m % 1000;
+
+    LCD_Colon(1);
+
+    LCD_putc(0, ' ');
+    LCD_putc(1, '0' + integer);
+    LCD_putc(2, '0' + (frac / 100));
+    LCD_putc(3, '0' + ((frac / 10) % 10));
+    LCD_putc(4, '0' + (frac % 10));
+    LCD_putc(5, 'R');
     LCD_putc(6, '\0');
 
     LCD_UpdateRequired(1, 0);

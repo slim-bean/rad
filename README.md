@@ -71,7 +71,9 @@ joystick:
 2. **µSv/h** — Dose rate (e.g., ` 0:79UV` for 0.79 µSv/h). The LCD
    colon acts as a decimal point. Conversion uses the Type 5 Cs-137
    sensitivity factor (53 CPM per µSv/h).
-3. **Count** — Total accumulated detections (e.g., `N  123`).
+3. **mrem/h** — Dose rate in millirems (e.g., ` 0:079R` for 0.079
+   mrem/h). Same measurement, traditional US unit (1 µSv = 0.1 mrem).
+4. **Count** — Total accumulated detections (e.g., `N  123`).
 
 If the sensor detects vibration / noise, the display shows `NOISE`
 until the disturbance passes. Counts during noise are discarded.
