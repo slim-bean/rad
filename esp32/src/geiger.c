@@ -3,8 +3,10 @@
 #include "freertos/task.h"
 #include "driver/gpio.h"
 #include "esp_timer.h"
+#include "rom/ets_sys.h"
 #include "pins.h"
 #include "geiger.h"
+#include "click.h"
 
 static portMUX_TYPE spinlock = portMUX_INITIALIZER_UNLOCKED;
 
@@ -13,8 +15,10 @@ static volatile uint8_t  current_bin;
 static volatile uint8_t  current_bin_count;
 static volatile uint32_t total_count;
 static volatile uint8_t  noise_flag;
-static volatile uint8_t  click_flag;
 static volatile uint8_t  seconds_elapsed;
+
+static TaskHandle_t click_task_handle;
+static uint8_t last_window;
 
 static esp_timer_handle_t second_timer;
 
@@ -27,8 +31,11 @@ static void IRAM_ATTR sig_isr(void *arg)
         if (current_bin_count < 255)
             current_bin_count++;
         total_count++;
-        click_flag = 1;
         portEXIT_CRITICAL_ISR(&spinlock);
+
+        BaseType_t woken = pdFALSE;
+        vTaskNotifyGiveFromISR(click_task_handle, &woken);
+        portYIELD_FROM_ISR(woken);
     }
     noise_flag = (ns != 0);
 }
@@ -46,6 +53,17 @@ static void second_tick(void *arg)
 }
 
 
+static void click_task(void *arg)
+{
+    while (1) {
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        click_start();
+        vTaskDelay(pdMS_TO_TICKS(2));
+        click_stop();
+    }
+}
+
+
 void geiger_init(void)
 {
     memset((void *)bin_counts, 0, sizeof(bin_counts));
@@ -53,7 +71,6 @@ void geiger_init(void)
     current_bin_count = 0;
     total_count = 0;
     noise_flag = 0;
-    click_flag = 0;
     seconds_elapsed = 0;
 
     gpio_config_t sig_cfg = {
@@ -83,33 +100,68 @@ void geiger_init(void)
     };
     esp_timer_create(&timer_args, &second_timer);
     esp_timer_start_periodic(second_timer, 1000000);
+
+    xTaskCreate(click_task, "click", 2048, NULL, 5, &click_task_handle);
 }
 
 
 uint16_t geiger_get_cpm(void)
 {
-    uint16_t sum = 0;
+    uint16_t long_sum = 0;
+    uint16_t short_sum = 0;
     uint8_t elapsed;
+    uint8_t cb;
 
     portENTER_CRITICAL(&spinlock);
     elapsed = seconds_elapsed;
+    cb = current_bin;
     for (int i = 0; i < GEIGER_WINDOW_SECONDS; i++)
-        sum += bin_counts[i];
-    sum += current_bin_count;
+        long_sum += bin_counts[i];
+    long_sum += current_bin_count;
+
+    /* Sum the most recent GEIGER_SHORT_WINDOW bins + current partial */
+    short_sum = current_bin_count;
+    uint8_t short_bins = (elapsed < GEIGER_SHORT_WINDOW) ? elapsed : GEIGER_SHORT_WINDOW;
+    for (uint8_t i = 0; i < short_bins; i++) {
+        uint8_t idx = (cb + GEIGER_WINDOW_SECONDS - i) % GEIGER_WINDOW_SECONDS;
+        short_sum += bin_counts[idx];
+    }
     portEXIT_CRITICAL(&spinlock);
 
-    if (elapsed == 0)
+    if (elapsed == 0) {
+        last_window = 0;
         return 0;
-    if (elapsed < GEIGER_WINDOW_SECONDS)
-        return (uint16_t)(((uint32_t)sum * 60UL) / elapsed);
-    return sum;
+    }
+
+    /* Not enough data yet — just extrapolate what we have */
+    if (elapsed < GEIGER_SHORT_WINDOW) {
+        last_window = elapsed;
+        return (uint16_t)(((uint32_t)long_sum * 60UL) / elapsed);
+    }
+
+    uint16_t long_cpm  = (elapsed < GEIGER_WINDOW_SECONDS)
+                       ? (uint16_t)(((uint32_t)long_sum * 60UL) / elapsed)
+                       : long_sum;
+    uint16_t short_cpm = (uint16_t)(((uint32_t)short_sum * 60UL) / (short_bins + 1));
+
+    /* If short-term differs from long-term by more than 50%, use short-term */
+    uint32_t diff = (short_cpm > long_cpm)
+                  ? (short_cpm - long_cpm)
+                  : (long_cpm - short_cpm);
+    if (long_cpm > 0 && diff * 2 > long_cpm) {
+        last_window = GEIGER_SHORT_WINDOW;
+        return short_cpm;
+    }
+
+    last_window = (elapsed < GEIGER_WINDOW_SECONDS) ? elapsed : GEIGER_WINDOW_SECONDS;
+    return long_cpm;
 }
 
 
-uint16_t geiger_get_dose_x100(void)
+uint32_t geiger_get_dose_x100(void)
 {
     uint16_t cpm = geiger_get_cpm();
-    return (uint16_t)(((uint32_t)cpm * 100UL) / GEIGER_CPM_PER_USV);
+    return ((uint32_t)cpm * 100UL) / GEIGER_CPM_PER_USV;
 }
 
 
@@ -129,15 +181,9 @@ bool geiger_is_noisy(void)
 }
 
 
-bool geiger_click_pending(void)
+uint8_t geiger_get_window(void)
 {
-    return click_flag != 0;
-}
-
-
-void geiger_click_ack(void)
-{
-    click_flag = 0;
+    return last_window;
 }
 
 

@@ -5,7 +5,6 @@
 #include "driver/gpio.h"
 #include "esp_log.h"
 #include "esp_pm.h"
-#include "rom/ets_sys.h"
 #include "pins.h"
 #include "display.h"
 #include "geiger.h"
@@ -49,11 +48,12 @@ static const char *TAG = "geiger";
 /*  Screen state — only redraw values that changed                     */
 /* ------------------------------------------------------------------ */
 static uint16_t prev_cpm   = 0xFFFF;
-static uint16_t prev_dose  = 0xFFFF;
-static uint16_t prev_mrem  = 0xFFFF;
+static uint32_t prev_dose  = 0xFFFFFFFF;
+static uint32_t prev_mrem  = 0xFFFFFFFF;
 static uint32_t prev_total = 0xFFFFFFFF;
 static bool     prev_noise = false;
 static uint16_t prev_batt  = 0xFFFF;
+static uint8_t  prev_win   = 0xFF;
 
 
 static void draw_static_labels(void)
@@ -78,7 +78,7 @@ static void draw_cpm(uint16_t cpm)
     prev_cpm = cpm;
 
     char buf[6];
-    snprintf(buf, sizeof(buf), "%5u", cpm > 99999 ? 99999 : cpm);
+    snprintf(buf, sizeof(buf), "%5u", (unsigned)cpm);
 
     uint16_t color = COL_GREEN;
     if (cpm > 100) color = COL_YELLOW;
@@ -95,27 +95,27 @@ static void draw_cpm(uint16_t cpm)
 }
 
 
-static void draw_dose(uint16_t dose_x100)
+static void draw_dose(uint32_t dose_x100)
 {
     if (dose_x100 == prev_dose) return;
     prev_dose = dose_x100;
 
     char buf[10];
-    if (dose_x100 > 9999) dose_x100 = 9999;
-    snprintf(buf, sizeof(buf), "%2u.%02u", dose_x100 / 100, dose_x100 % 100);
+    if (dose_x100 > 99999) dose_x100 = 99999;
+    snprintf(buf, sizeof(buf), "%3lu.%02lu", (unsigned long)(dose_x100 / 100), (unsigned long)(dose_x100 % 100));
 
     display_draw_string(DOSE_X, DOSE_Y + 20, buf, COL_YELLOW, COL_BLACK, 2);
 }
 
 
-static void draw_mrem(uint16_t mrem_x1000)
+static void draw_mrem(uint32_t mrem_x1000)
 {
     if (mrem_x1000 == prev_mrem) return;
     prev_mrem = mrem_x1000;
 
     char buf[10];
-    if (mrem_x1000 > 9999) mrem_x1000 = 9999;
-    snprintf(buf, sizeof(buf), "%1u.%03u", mrem_x1000 / 1000, mrem_x1000 % 1000);
+    if (mrem_x1000 > 99999) mrem_x1000 = 99999;
+    snprintf(buf, sizeof(buf), "%2lu.%03lu", (unsigned long)(mrem_x1000 / 1000), (unsigned long)(mrem_x1000 % 1000));
 
     display_draw_string(MREM_X, MREM_Y + 20, buf, COL_YELLOW, COL_BLACK, 2);
 }
@@ -161,6 +161,17 @@ static void draw_noise(bool noisy)
 }
 
 
+static void draw_window(uint8_t win)
+{
+    if (win == prev_win) return;
+    prev_win = win;
+
+    char buf[6];
+    snprintf(buf, sizeof(buf), "%2us", win);
+    display_draw_string(CPM_LABEL_X + 56, CPM_LABEL_Y, buf, COL_GREY, COL_BLACK, 2);
+}
+
+
 static void draw_battery(uint16_t mv)
 {
     uint16_t rounded = (mv / 10) * 10;
@@ -203,19 +214,14 @@ void app_main(void)
     uint32_t loop_count = 0;
 
     while (1) {
-        if (geiger_click_pending()) {
-            geiger_click_ack();
-            click_start();
-            ets_delay_us(1500);
-            click_stop();
-        }
-
         uint16_t cpm    = geiger_get_cpm();
-        uint16_t dose   = geiger_get_dose_x100();
+        uint8_t  win    = geiger_get_window();
+        uint32_t dose   = geiger_get_dose_x100();
         bool     noisy  = geiger_is_noisy();
         uint32_t total  = geiger_get_total();
 
         draw_cpm(cpm);
+        draw_window(win);
         draw_dose(dose);
         draw_mrem(dose);    /* mrem_x1000 == dose_x100 numerically */
         draw_bar(cpm);
