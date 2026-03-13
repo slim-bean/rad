@@ -4,6 +4,7 @@
 #include "freertos/task.h"
 #include "driver/gpio.h"
 #include "esp_log.h"
+#include "esp_pm.h"
 #include "rom/ets_sys.h"
 #include "pins.h"
 #include "display.h"
@@ -181,6 +182,14 @@ void app_main(void)
 {
     ESP_LOGI(TAG, "Geiger counter starting");
 
+    esp_pm_config_t pm_cfg = {
+        .max_freq_mhz = 80,
+        .min_freq_mhz = 40,
+        .light_sleep_enable = false,
+    };
+    ESP_ERROR_CHECK(esp_pm_configure(&pm_cfg));
+    ESP_LOGI(TAG, "DFS enabled: %d–%d MHz", pm_cfg.min_freq_mhz, pm_cfg.max_freq_mhz);
+
     display_init();
     click_init();
     geiger_init();
@@ -213,14 +222,14 @@ void app_main(void)
         draw_total(total);
         draw_noise(noisy);
 
-        if (++loop_count % 20 == 0)   /* ~2 s */
+        if (++loop_count % 8 == 0)    /* ~2 s */
             draw_battery(battery_read_mv());
 
-        if (loop_count % 50 == 0)     /* ~5 s */
+        if (loop_count % 20 == 0)     /* ~5 s */
             ESP_LOGI(TAG, "cpm=%u total=%lu noise=%d ns_pin=%d",
                      cpm, (unsigned long)total, noisy,
                      gpio_get_level(PIN_GEIGER_NS));
 
-        vTaskDelay(pdMS_TO_TICKS(100));
+        vTaskDelay(pdMS_TO_TICKS(250));
     }
 }

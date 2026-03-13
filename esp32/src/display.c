@@ -1,5 +1,6 @@
 #include <string.h>
 #include "driver/gpio.h"
+#include "driver/ledc.h"
 #include "driver/spi_master.h"
 #include "esp_check.h"
 #include "esp_lcd_panel_io.h"
@@ -10,6 +11,13 @@
 #include "display.h"
 
 static const char *TAG = "display";
+
+#define BL_TIMER      LEDC_TIMER_1
+#define BL_CHANNEL    LEDC_CHANNEL_1
+#define BL_FREQ_HZ    25000
+#define BL_RESOLUTION LEDC_TIMER_10_BIT
+#define BL_DUTY_MAX   1023
+#define BL_DUTY_PCT   40
 
 /* ------------------------------------------------------------------ */
 /*  8×8 bitmap font — printable ASCII 0x20–0x7E, MSB = leftmost pixel */
@@ -149,13 +157,25 @@ static uint16_t line_buf[LINE_BUF_W];
 
 void display_init(void)
 {
-    gpio_config_t bl_cfg = {
-        .pin_bit_mask = (1ULL << PIN_TFT_BL),
-        .mode = GPIO_MODE_OUTPUT,
+    ledc_timer_config_t bl_timer = {
+        .speed_mode      = LEDC_LOW_SPEED_MODE,
+        .timer_num       = BL_TIMER,
+        .duty_resolution = BL_RESOLUTION,
+        .freq_hz         = BL_FREQ_HZ,
+        .clk_cfg         = LEDC_AUTO_CLK,
     };
-    ESP_ERROR_CHECK(gpio_config(&bl_cfg));
-    ESP_ERROR_CHECK(gpio_set_level(PIN_TFT_BL, 1));
-    ESP_LOGI(TAG, "Backlight on (GPIO %d)", PIN_TFT_BL);
+    ESP_ERROR_CHECK(ledc_timer_config(&bl_timer));
+
+    ledc_channel_config_t bl_chan = {
+        .speed_mode = LEDC_LOW_SPEED_MODE,
+        .channel    = BL_CHANNEL,
+        .timer_sel  = BL_TIMER,
+        .gpio_num   = PIN_TFT_BL,
+        .duty       = (BL_DUTY_MAX * BL_DUTY_PCT) / 100,
+        .hpoint     = 0,
+    };
+    ESP_ERROR_CHECK(ledc_channel_config(&bl_chan));
+    ESP_LOGI(TAG, "Backlight PWM %d%% @ %d Hz (GPIO %d)", BL_DUTY_PCT, BL_FREQ_HZ, PIN_TFT_BL);
 
     spi_bus_config_t bus = {
         .sclk_io_num     = PIN_TFT_SCLK,
@@ -205,7 +225,9 @@ void display_init(void)
 
 void display_backlight(bool on)
 {
-    gpio_set_level(PIN_TFT_BL, on ? 1 : 0);
+    uint32_t duty = on ? (BL_DUTY_MAX * BL_DUTY_PCT) / 100 : 0;
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, BL_CHANNEL, duty);
+    ledc_update_duty(LEDC_LOW_SPEED_MODE, BL_CHANNEL);
 }
 
 
