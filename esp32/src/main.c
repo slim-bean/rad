@@ -5,6 +5,7 @@
 #include "driver/gpio.h"
 #include "esp_log.h"
 #include "esp_pm.h"
+#include "esp_system.h"
 #include "pins.h"
 #include "display.h"
 #include "geiger.h"
@@ -12,6 +13,10 @@
 #include "battery.h"
 
 static const char *TAG = "geiger";
+
+#define APP_CPU_FREQ_MHZ      160
+#define RESET_ACK_POLL_MS     20
+#define RESET_ACK_DEBOUNCE_MS 40
 
 /* ------------------------------------------------------------------ */
 /*  Layout constants for 320×240 landscape                             */
@@ -54,6 +59,87 @@ static uint32_t prev_total = 0xFFFFFFFF;
 static bool     prev_noise = false;
 static uint16_t prev_batt  = 0xFFFF;
 static uint8_t  prev_win   = 0xFF;
+
+
+static const char *reset_reason_name(esp_reset_reason_t reason)
+{
+    switch (reason) {
+    case ESP_RST_POWERON:    return "POWER ON";
+    case ESP_RST_SW:         return "SOFTWARE";
+    case ESP_RST_PANIC:      return "PANIC";
+    case ESP_RST_INT_WDT:    return "INT WDT";
+    case ESP_RST_TASK_WDT:   return "TASK WDT";
+    case ESP_RST_WDT:        return "WDT";
+    case ESP_RST_BROWNOUT:   return "BROWNOUT";
+    case ESP_RST_PWR_GLITCH: return "PWR GLITCH";
+    case ESP_RST_CPU_LOCKUP: return "CPU LOCKUP";
+    case ESP_RST_DEEPSLEEP:  return "DEEPSLEEP";
+    case ESP_RST_UNKNOWN:    return "UNKNOWN";
+    default:                 return "OTHER";
+    }
+}
+
+
+static bool should_show_reset_notice(esp_reset_reason_t reason)
+{
+    switch (reason) {
+    case ESP_RST_PANIC:
+    case ESP_RST_INT_WDT:
+    case ESP_RST_TASK_WDT:
+    case ESP_RST_WDT:
+    case ESP_RST_BROWNOUT:
+    case ESP_RST_PWR_GLITCH:
+    case ESP_RST_CPU_LOCKUP:
+        return true;
+    default:
+        return false;
+    }
+}
+
+
+static void ack_button_init(void)
+{
+    gpio_config_t btn_cfg = {
+        .pin_bit_mask = (1ULL << PIN_ACK_BUTTON),
+        .mode         = GPIO_MODE_INPUT,
+        .pull_up_en   = GPIO_PULLUP_ENABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type    = GPIO_INTR_DISABLE,
+    };
+    ESP_ERROR_CHECK(gpio_config(&btn_cfg));
+}
+
+
+static bool ack_button_pressed(void)
+{
+    return gpio_get_level(PIN_ACK_BUTTON) == 0;
+}
+
+
+static void show_reset_notice_if_needed(esp_reset_reason_t reason)
+{
+    if (!should_show_reset_notice(reason))
+        return;
+
+    display_fill_rect(0, 0, TFT_WIDTH, TFT_HEIGHT, COL_BLACK);
+    display_draw_string(24, 24, "RESET DETECTED", COL_RED, COL_BLACK, 2);
+    display_draw_string(24, 72, "REASON", COL_GREY, COL_BLACK, 2);
+    display_draw_string(24, 96, reset_reason_name(reason), COL_YELLOW, COL_BLACK, 2);
+    display_draw_string(24, 152, "PRESS BTN GPIO27", COL_WHITE, COL_BLACK, 2);
+    display_draw_string(24, 176, "TO CONTINUE", COL_WHITE, COL_BLACK, 2);
+
+    for (;;) {
+        if (ack_button_pressed()) {
+            vTaskDelay(pdMS_TO_TICKS(RESET_ACK_DEBOUNCE_MS));
+            if (ack_button_pressed()) {
+                while (ack_button_pressed())
+                    vTaskDelay(pdMS_TO_TICKS(RESET_ACK_POLL_MS));
+                break;
+            }
+        }
+        vTaskDelay(pdMS_TO_TICKS(RESET_ACK_POLL_MS));
+    }
+}
 
 
 static void draw_static_labels(void)
@@ -193,15 +279,20 @@ void app_main(void)
 {
     ESP_LOGI(TAG, "Geiger counter starting");
 
+    esp_reset_reason_t reset_reason = esp_reset_reason();
+    ack_button_init();
+
     esp_pm_config_t pm_cfg = {
-        .max_freq_mhz = 80,
-        .min_freq_mhz = 40,
+        .max_freq_mhz = APP_CPU_FREQ_MHZ,
+        .min_freq_mhz = APP_CPU_FREQ_MHZ,
         .light_sleep_enable = false,
     };
     ESP_ERROR_CHECK(esp_pm_configure(&pm_cfg));
-    ESP_LOGI(TAG, "DFS enabled: %d–%d MHz", pm_cfg.min_freq_mhz, pm_cfg.max_freq_mhz);
+    ESP_LOGI(TAG, "CPU fixed at %d MHz", APP_CPU_FREQ_MHZ);
+    ESP_LOGI(TAG, "Last reset reason: %s", reset_reason_name(reset_reason));
 
     display_init();
+    show_reset_notice_if_needed(reset_reason);
     click_init();
     geiger_init();
     battery_init();

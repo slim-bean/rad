@@ -1,26 +1,36 @@
 #include <string.h>
 #include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
 #include "driver/gpio.h"
 #include "esp_timer.h"
-#include "rom/ets_sys.h"
 #include "pins.h"
 #include "geiger.h"
 #include "click.h"
 
 static portMUX_TYPE spinlock = portMUX_INITIALIZER_UNLOCKED;
 
-static volatile uint8_t  bin_counts[GEIGER_WINDOW_SECONDS];
+/* Bound the audio path so high radiation rates don't flood the CPU with clicks. */
+#define CLICK_ON_TIME_US   1500
+#define CLICK_INTERVAL_US  5000
+#define CLICK_BACKLOG_MAX  16
+
+static volatile uint16_t bin_counts[GEIGER_WINDOW_SECONDS];
 static volatile uint8_t  current_bin;
-static volatile uint8_t  current_bin_count;
+static volatile uint16_t current_bin_count;
 static volatile uint32_t total_count;
 static volatile uint8_t  noise_flag;
 static volatile uint8_t  seconds_elapsed;
-
-static TaskHandle_t click_task_handle;
+static volatile uint16_t pending_clicks;
 static uint8_t last_window;
 
 static esp_timer_handle_t second_timer;
+static esp_timer_handle_t click_timer;
+static esp_timer_handle_t click_stop_timer;
+
+
+static uint16_t clamp_cpm(uint32_t cpm)
+{
+    return (cpm > UINT16_MAX) ? UINT16_MAX : (uint16_t)cpm;
+}
 
 
 static void IRAM_ATTR sig_isr(void *arg)
@@ -28,14 +38,11 @@ static void IRAM_ATTR sig_isr(void *arg)
     int ns = gpio_get_level(PIN_GEIGER_NS);
     if (ns == 0) {
         portENTER_CRITICAL_ISR(&spinlock);
-        if (current_bin_count < 255)
-            current_bin_count++;
+        current_bin_count++;
         total_count++;
+        if (pending_clicks < CLICK_BACKLOG_MAX)
+            pending_clicks++;
         portEXIT_CRITICAL_ISR(&spinlock);
-
-        BaseType_t woken = pdFALSE;
-        vTaskNotifyGiveFromISR(click_task_handle, &woken);
-        portYIELD_FROM_ISR(woken);
     }
     noise_flag = (ns != 0);
 }
@@ -53,14 +60,29 @@ static void second_tick(void *arg)
 }
 
 
-static void click_task(void *arg)
+static void click_stop_cb(void *arg)
 {
-    while (1) {
-        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-        click_start();
-        vTaskDelay(pdMS_TO_TICKS(2));
-        click_stop();
+    click_stop();
+}
+
+
+static void click_tick(void *arg)
+{
+    bool emit_click = false;
+
+    portENTER_CRITICAL(&spinlock);
+    if (pending_clicks > 0) {
+        pending_clicks--;
+        emit_click = true;
     }
+    portEXIT_CRITICAL(&spinlock);
+
+    if (!emit_click)
+        return;
+
+    click_start();
+    (void)esp_timer_stop(click_stop_timer);
+    esp_timer_start_once(click_stop_timer, CLICK_ON_TIME_US);
 }
 
 
@@ -72,6 +94,7 @@ void geiger_init(void)
     total_count = 0;
     noise_flag = 0;
     seconds_elapsed = 0;
+    pending_clicks = 0;
 
     gpio_config_t sig_cfg = {
         .pin_bit_mask = (1ULL << PIN_GEIGER_SIG),
@@ -101,14 +124,24 @@ void geiger_init(void)
     esp_timer_create(&timer_args, &second_timer);
     esp_timer_start_periodic(second_timer, 1000000);
 
-    xTaskCreate(click_task, "click", 2048, NULL, 5, &click_task_handle);
+    const esp_timer_create_args_t click_timer_args = {
+        .callback = click_tick,
+        .name     = "click_rate",
+    };
+    const esp_timer_create_args_t click_stop_timer_args = {
+        .callback = click_stop_cb,
+        .name     = "click_stop",
+    };
+    esp_timer_create(&click_stop_timer_args, &click_stop_timer);
+    esp_timer_create(&click_timer_args, &click_timer);
+    esp_timer_start_periodic(click_timer, CLICK_INTERVAL_US);
 }
 
 
 uint16_t geiger_get_cpm(void)
 {
-    uint16_t long_sum = 0;
-    uint16_t short_sum = 0;
+    uint32_t long_sum = 0;
+    uint32_t short_sum = 0;
     uint8_t elapsed;
     uint8_t cb;
 
@@ -136,13 +169,13 @@ uint16_t geiger_get_cpm(void)
     /* Not enough data yet — just extrapolate what we have */
     if (elapsed < GEIGER_SHORT_WINDOW) {
         last_window = elapsed;
-        return (uint16_t)(((uint32_t)long_sum * 60UL) / elapsed);
+        return clamp_cpm((long_sum * 60UL) / elapsed);
     }
 
-    uint16_t long_cpm  = (elapsed < GEIGER_WINDOW_SECONDS)
-                       ? (uint16_t)(((uint32_t)long_sum * 60UL) / elapsed)
+    uint32_t long_cpm  = (elapsed < GEIGER_WINDOW_SECONDS)
+                       ? ((long_sum * 60UL) / elapsed)
                        : long_sum;
-    uint16_t short_cpm = (uint16_t)(((uint32_t)short_sum * 60UL) / (short_bins + 1));
+    uint32_t short_cpm = (short_sum * 60UL) / (short_bins + 1);
 
     /* If short-term differs from long-term by more than 50%, use short-term */
     uint32_t diff = (short_cpm > long_cpm)
@@ -150,11 +183,11 @@ uint16_t geiger_get_cpm(void)
                   : (long_cpm - short_cpm);
     if (long_cpm > 0 && diff * 2 > long_cpm) {
         last_window = GEIGER_SHORT_WINDOW;
-        return short_cpm;
+        return clamp_cpm(short_cpm);
     }
 
     last_window = (elapsed < GEIGER_WINDOW_SECONDS) ? elapsed : GEIGER_WINDOW_SECONDS;
-    return long_cpm;
+    return clamp_cpm(long_cpm);
 }
 
 

@@ -27,5 +27,8 @@
 /* ---- Piezo buzzer (Adafruit #1739) ---- */
 #define PIN_PIEZO       15          /* A4  — LEDC PWM output */
 
+/* ---- User acknowledge button ---- */
+#define PIN_ACK_BUTTON  27          /* NO switch to GND via 220 ohm, active LOW */
+
 /* ---- Battery voltage ---- */
 #define PIN_VBAT        34          /* A2  — input-only, 1M/1M divider to VBAT */
